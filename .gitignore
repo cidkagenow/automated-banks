@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 .venv/
+data/screenshots/
+data/snapshots.json
+data/launch_debug/
+.claude/
