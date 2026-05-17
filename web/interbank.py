@@ -188,7 +188,9 @@ def _fill_and_submit(page: Page, dry_run: bool = False) -> None:
 
     # Pre-clear stale OTP emails BEFORE triggering a new one
     log.info("clearing stale OTP emails before submit")
-    otp.pre_clear_inbox(_env("YAHOO_EMAIL"), _env("YAHOO_APP_PASSWORD"))
+    otp_email = os.getenv("OTP_EMAIL") or _env("YAHOO_EMAIL")
+    otp_pw = os.getenv("OTP_APP_PASSWORD") or _env("YAHOO_APP_PASSWORD")
+    otp.pre_clear_inbox(otp_email, otp_pw)
 
     # Submit
     log.info("clicking submit")
@@ -260,8 +262,8 @@ def _login(page: Page, dry_run: bool = False) -> None:
         raise RuntimeError("Unexpected state after step 1 — check screenshot")
 
     # Step 2: Enter verification code (OTP sent to email)
-    yahoo_email = _env("YAHOO_EMAIL")
-    yahoo_pw = _env("YAHOO_APP_PASSWORD")
+    yahoo_email = os.getenv("OTP_EMAIL") or _env("YAHOO_EMAIL")
+    yahoo_pw = os.getenv("OTP_APP_PASSWORD") or _env("YAHOO_APP_PASSWORD")
     log.info("fetching OTP from Yahoo Mail")
     code = otp.fetch_otp(yahoo_email, yahoo_pw)
 
