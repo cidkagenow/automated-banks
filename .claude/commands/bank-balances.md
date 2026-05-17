@@ -91,9 +91,12 @@ actions.press('enter')
 
 ## Flow: Interbank
 
-1. Go home: `actions.go_home()`, wait 1.5s
-2. Close front app: `actions.close_front_app(b)`, wait 1.5s
-3. Launch: `actions.launch('Interbank')`
+1. **Restart iPhone Mirroring** to get a clean state (fixes Spotlight misfires and stale input):
+   ```python
+   actions.restart_ipm()
+   ```
+   After restart, unlock the IPM lock screen (see "IPM Lock Screen" section above). Re-fetch the window ID since it changes after restart.
+2. Launch: `actions.launch('Interbank')`
 4. Wait 4s, screenshot. You should see "Hola <name>" with password field and "Ingresar" button.
 5. If you see a sub-page (back arrow at top-left, NOT the main login), tap back: `x=0.084, y=0.097`
 6. If you see a marketing modal or "Entendido" button, tap it: `x=0.50, y=0.65`
@@ -106,7 +109,7 @@ actions.press('enter')
 
 ## Save Results
 
-Write all balances to `~/Desktop/bank_balances.csv` (append mode). Columns:
+Write all balances to `~/Desktop/bank_balances.csv` using **upsert** logic — update existing rows, don't duplicate. Columns:
 ```
 timestamp, bank, account, amount, currency, kind
 ```
@@ -116,7 +119,7 @@ timestamp, bank, account, amount, currency, kind
 - `currency`: "MYR" for Maybank, "PEN" for S/ amounts, "USD" for $ amounts
 - `kind`: "debit" for savings/checking (Saldo disponible), "credit" for credit cards (Línea disponible)
 
-If the file doesn't exist, write the header row first.
+**Upsert logic**: Read the existing CSV, match rows by `(bank, account)` key. If a row exists for that account, update its `timestamp`, `amount`, `currency`, and `kind`. If not, append a new row. Write the full file back. This ensures one row per account with the latest data.
 
 ## Error Handling
 
