@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -41,6 +42,23 @@ def _merge_balances(top: dict[str, Any], bot: dict[str, Any]) -> dict[str, Any]:
     return {"balances": list(seen.values())}
 
 
+def _merge_transactions(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge multiple extraction results, deduplicating transactions."""
+    seen: dict[tuple, dict] = {}
+    meta: dict[str, Any] = {}
+    for r in results:
+        stmt = r.get("statement", r)
+        if not meta:
+            meta = {k: v for k, v in stmt.items() if k != "transactions"}
+        for txn in stmt.get("transactions", []):
+            key = (txn.get("date", ""), txn.get("description", ""),
+                   str(txn.get("amount", "")))
+            seen[key] = txn
+    txns = sorted(seen.values(),
+                  key=lambda t: t.get("date", ""), reverse=True)
+    return {"statement": {**meta, "transactions": txns}}
+
+
 def _execute_one(do: dict[str, Any], coord: actions.Coord, small: Path) -> tuple[bool, dict]:
     """Run a single action dict. Returns (is_done, result_if_done)."""
     t = do["type"]
@@ -54,7 +72,11 @@ def _execute_one(do: dict[str, Any], coord: actions.Coord, small: Path) -> tuple
     elif t == "tap_norm":
         x = int(coord.img_w * float(do["x"]))
         y = int(coord.img_h * float(do["y"]))
-        actions.tap(coord, x, y)
+        hold = float(do.get("hold", 0.15))
+        if do.get("pyautogui"):
+            actions.tap_pyautogui(coord, x, y)
+        else:
+            actions.tap(coord, x, y, hold=hold)
     elif t == "swipe":
         x1 = int(coord.img_w * float(do["x1_norm"]))
         y1 = int(coord.img_h * float(do["y1_norm"]))
@@ -66,6 +88,49 @@ def _execute_one(do: dict[str, Any], coord: actions.Coord, small: Path) -> tuple
         _find_and_tap_icon(coord, small, str(do["app"]),
                            max_pages=int(do.get("max_pages", 5)))
         time.sleep(2.5)  # let the app open
+    elif t == "find_and_tap":
+        if do.get("fresh"):
+            time.sleep(float(do.get("fresh_wait", 3.0)))
+            fresh_raw = screenshot.capture(coord.bounds)
+            small = screenshot.downscale(fresh_raw)
+            if do.get("debug"):
+                debug_path = SHOTS_DIR / f"debug-find_and_tap-{do.get('text','')}.png"
+                shutil.copyfile(small, debug_path)
+                log.info("saved debug screenshot: %s", debug_path)
+        target = (os.getenv(str(do["env_key"])) if "env_key" in do
+                  else str(do.get("text", "")))
+        if not target:
+            raise RuntimeError(f"find_and_tap: no target (env_key={do.get('env_key')})")
+        scroll_px = int(do.get("scroll", 400))
+        max_scrolls = int(do.get("max_scrolls", 3))
+        loc = vision.find_text(small, target)
+        for attempt in range(max_scrolls):
+            if loc is not None:
+                break
+            log.info("find_and_tap: '%s' not found, scrolling (attempt %d/%d)",
+                     target, attempt + 1, max_scrolls)
+            actions.tap(coord, coord.img_w // 2, int(coord.img_h * 0.45))
+            time.sleep(0.5)
+            actions.scroll_down(coord, scroll_px)
+            time.sleep(1.5)
+            fresh_raw = screenshot.capture(coord.bounds)
+            small = screenshot.downscale(fresh_raw)
+            loc = vision.find_text(small, target)
+        if loc is None:
+            raise RuntimeError(f"'{target}' not found on screen")
+        x = int(coord.img_w * loc[0])
+        y = int(coord.img_h * loc[1])
+        actions.tap(coord, x, y)
+    elif t == "carousel_swipe":
+        x1 = int(coord.img_w * float(do["x1_norm"]))
+        y1 = int(coord.img_h * float(do["y1_norm"]))
+        x2 = int(coord.img_w * float(do["x2_norm"]))
+        y2 = int(coord.img_h * float(do["y2_norm"]))
+        actions.carousel_swipe(coord, x1, y1, x2, y2)
+    elif t == "scroll_left":
+        x = int(coord.img_w * float(do.get("x_norm", 0.5)))
+        y = int(coord.img_h * float(do.get("y_norm", 0.5)))
+        actions.scroll_left(coord, x, y, int(do.get("amount", 300)))
     elif t == "type_password":
         actions.type_password(str(do["key"]))
     elif t == "tap_pin":
@@ -87,6 +152,71 @@ def _execute_one(do: dict[str, Any], coord: actions.Coord, small: Path) -> tuple
         fresh_small = screenshot.downscale(fresh)
         result_bot = vision.extract(fresh_small, str(do["extract"]))
         result = _merge_balances(result_top, result_bot)
+        return True, result
+    elif t == "scroll_collect_done":
+        max_pages = int(do.get("max_pages", 5))
+        scrolls_per = int(do.get("scrolls_per_page", 3))
+        down = int(do.get("down", 400))
+        prompt = str(do["extract"])
+        all_results: list[dict[str, Any]] = []
+        prev_count = 0
+
+        # Pagination ">" position (fixed at bottom-center-right of page).
+        next_x_norm = float(do.get("next_x", 0.64))
+        next_y_norm = float(do.get("next_y", 0.95))
+
+        for pg in range(max_pages):
+            if pg > 0:
+                # Keep scrolling until the pagination bar is on screen.
+                for _ in range(6):
+                    actions.scroll_down(coord, down)
+                    time.sleep(1.0)
+                time.sleep(1.0)
+                # Tap the next-page ">" button at its fixed position.
+                nx = int(coord.img_w * next_x_norm)
+                ny = int(coord.img_h * next_y_norm)
+                log.info("scroll_collect: tapping '>' at (%d, %d)", nx, ny)
+                actions.tap(coord, nx, ny)
+                time.sleep(2.5)
+                fresh_raw = screenshot.capture(coord.bounds)
+                cur = screenshot.downscale(fresh_raw)
+            else:
+                cur = small
+
+            # Extract from current view.
+            all_results.append(vision.extract(cur, prompt))
+            log.info("scroll_collect: page %d top extracted", pg + 1)
+
+            # Scroll down — no tap beforehand (tapping can trigger
+            # dropdowns or steal focus from the scroll view).
+            for s in range(scrolls_per):
+                actions.scroll_down(coord, down)
+                time.sleep(2.0)
+                fresh_raw = screenshot.capture(coord.bounds)
+                cur = screenshot.downscale(fresh_raw)
+                page_result = vision.extract(cur, prompt)
+                txns = page_result.get("statement", page_result).get(
+                    "transactions", [])
+                log.info("scroll_collect: page %d scroll %d — %d txns",
+                         pg + 1, s + 1, len(txns))
+                if txns:
+                    all_results.append(page_result)
+                else:
+                    break
+
+            # Check if we gained new unique transactions this page.
+            merged = _merge_transactions(all_results)
+            cur_count = len(merged.get("statement", {}).get(
+                "transactions", []))
+            if cur_count == prev_count and pg > 0:
+                log.info("scroll_collect: no new transactions on page %d, "
+                         "stopping", pg + 1)
+                break
+            prev_count = cur_count
+
+        result = _merge_transactions(all_results)
+        n = len(result.get("statement", {}).get("transactions", []))
+        log.info("scroll_collect: %d unique transactions total", n)
         return True, result
     elif t == "done":
         result = vision.extract(small, str(do["extract"]))

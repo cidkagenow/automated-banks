@@ -5,4 +5,5 @@ __pycache__/
 data/screenshots/
 data/snapshots.json
 data/launch_debug/
-.claude/
+.claude/memory/
+.claude/settings*

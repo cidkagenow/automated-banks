@@ -70,13 +70,23 @@ KEY_CODES = {"enter": 36, "return": 36, "tab": 48, "esc": 53,
              "escape": 53, "backspace": 51, "space": 49}
 
 
-def tap(c: Coord, x: int, y: int) -> None:
+def tap(c: Coord, x: int, y: int, hold: float = 0.15) -> None:
     if not c.in_bounds(x, y):
         raise ValueError(f"tap ({x},{y}) outside screenshot {c.img_w}x{c.img_h}")
     window.focus()
     sx, sy = c.to_screen(x, y)
-    log.info("tap @ (%d,%d) screen(%.0f,%.0f)", x, y, sx, sy)
-    _cg_click(sx, sy)
+    log.info("tap @ (%d,%d) screen(%.0f,%.0f) hold=%.3f", x, y, sx, sy, hold)
+    _cg_click(sx, sy, hold=hold)
+
+
+def tap_pyautogui(c: Coord, x: int, y: int) -> None:
+    """Tap using pyautogui — fallback for elements unresponsive to CGEvents."""
+    if not c.in_bounds(x, y):
+        raise ValueError(f"tap ({x},{y}) outside screenshot {c.img_w}x{c.img_h}")
+    window.focus()
+    sx, sy = c.to_screen(x, y)
+    log.info("tap_pyautogui @ (%d,%d) screen(%.0f,%.0f)", x, y, sx, sy)
+    pyautogui.click(sx, sy)
 
 
 def _cg_click(sx: float, sy: float, hold: float = 0.15) -> None:
@@ -228,6 +238,90 @@ def scroll_down(c: Coord, amount: int = 200) -> None:
         time.sleep(0.015)
 
     ev = CGEventCreateScrollWheelEvent(source, kCGScrollEventUnitPixel, 1, 0)
+    CGEventSetIntegerValueField(ev, kCGScrollWheelEventScrollPhase, 4)
+    CGEventSetIntegerValueField(ev, kCGScrollWheelEventMomentumPhase, 0)
+    CGEventPost(kCGHIDEventTap, ev)
+
+
+def carousel_swipe(c: Coord, x1: int, y1: int, x2: int, y2: int) -> None:
+    """Swipe optimized for in-app carousels / page views.
+
+    Adds a brief hold then moves fast — this lets the scroll view steal
+    the touch from any button that initially captured it.
+    """
+    from Quartz import (
+        CGEventCreateMouseEvent,
+        CGEventPost,
+        kCGEventLeftMouseDown,
+        kCGEventLeftMouseDragged,
+        kCGEventLeftMouseUp,
+        kCGHIDEventTap,
+        kCGMouseButtonLeft,
+    )
+
+    if not (c.in_bounds(x1, y1) and c.in_bounds(x2, y2)):
+        raise ValueError("carousel_swipe endpoints outside bounds")
+    window.focus()
+    sx1, sy1 = c.to_screen(x1, y1)
+    sx2, sy2 = c.to_screen(x2, y2)
+
+    def post(kind, x, y):
+        ev = CGEventCreateMouseEvent(None, kind, (x, y), kCGMouseButtonLeft)
+        CGEventPost(kCGHIDEventTap, ev)
+
+    post(kCGEventLeftMouseDown, sx1, sy1)
+    time.sleep(0.12)
+    # Fast drag with many intermediate points
+    steps = 30
+    duration = 0.15
+    for i in range(1, steps + 1):
+        t = i / steps
+        x = sx1 + (sx2 - sx1) * t
+        y = sy1 + (sy2 - sy1) * t
+        post(kCGEventLeftMouseDragged, x, y)
+        time.sleep(duration / steps)
+    post(kCGEventLeftMouseUp, sx2, sy2)
+
+
+def scroll_left(c: Coord, x: int, y: int, amount: int = 300) -> None:
+    """Horizontal trackpad scroll (swipe content left = next page)."""
+    from Quartz import (
+        CGEventCreateScrollWheelEvent,
+        CGEventPost,
+        CGEventSetIntegerValueField,
+        CGEventSourceCreate,
+        CGWarpMouseCursorPosition,
+        kCGEventSourceStateHIDSystemState,
+        kCGHIDEventTap,
+        kCGScrollEventUnitPixel,
+    )
+
+    kCGScrollWheelEventScrollPhase = 99
+    kCGScrollWheelEventMomentumPhase = 123
+
+    window.focus()
+    sx, sy = c.to_screen(x, y)
+    CGWarpMouseCursorPosition((sx, sy))
+    time.sleep(0.15)
+
+    source = CGEventSourceCreate(kCGEventSourceStateHIDSystemState)
+    per_tick = -8
+    ticks = max(1, amount // abs(per_tick))
+
+    ev = CGEventCreateScrollWheelEvent(source, kCGScrollEventUnitPixel, 2, 0, per_tick)
+    CGEventSetIntegerValueField(ev, kCGScrollWheelEventScrollPhase, 1)
+    CGEventSetIntegerValueField(ev, kCGScrollWheelEventMomentumPhase, 0)
+    CGEventPost(kCGHIDEventTap, ev)
+    time.sleep(0.02)
+
+    for _ in range(ticks):
+        ev = CGEventCreateScrollWheelEvent(source, kCGScrollEventUnitPixel, 2, 0, per_tick)
+        CGEventSetIntegerValueField(ev, kCGScrollWheelEventScrollPhase, 2)
+        CGEventSetIntegerValueField(ev, kCGScrollWheelEventMomentumPhase, 0)
+        CGEventPost(kCGHIDEventTap, ev)
+        time.sleep(0.015)
+
+    ev = CGEventCreateScrollWheelEvent(source, kCGScrollEventUnitPixel, 2, 0, 0)
     CGEventSetIntegerValueField(ev, kCGScrollWheelEventScrollPhase, 4)
     CGEventSetIntegerValueField(ev, kCGScrollWheelEventMomentumPhase, 0)
     CGEventPost(kCGHIDEventTap, ev)

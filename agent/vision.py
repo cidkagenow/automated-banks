@@ -126,6 +126,34 @@ def extract(screenshot: Path, instruction: str) -> dict[str, Any]:
     return _parse_json(_generate(prompt, screenshot))
 
 
+def find_text(screenshot: Path, text: str) -> tuple[float, float] | None:
+    """Locate an element containing specific text on the screenshot.
+
+    Returns normalized (x, y) of the element center, or None if not found.
+    """
+    prompt = (
+        f"Find the element or row containing the text '{text}' on this "
+        f"iPhone screenshot. Look for an exact or close match — the text "
+        f"may appear alongside an icon, inside a card, or as part of a list "
+        f"row. If found, respond with: "
+        f'{{"found": true, "x": <number 0..1>, "y": <number 0..1>}} '
+        f"giving the element's CENTER in normalized image coordinates "
+        f"(x: 0 = left edge, 1 = right edge; y: 0 = top, 1 = bottom). "
+        f"If not found, respond with: "
+        f'{{"found": false}}. Respond with ONE JSON object, nothing else.'
+    )
+    raw = _parse_json(_generate(prompt, screenshot))
+    if not raw.get("found"):
+        return None
+    try:
+        x = float(raw["x"]); y = float(raw["y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+        return None
+    return (x, y)
+
+
 def find_icon(screenshot: Path, app_name: str) -> tuple[float, float] | None:
     """Locate an app icon on the current iPhone screenshot.
 

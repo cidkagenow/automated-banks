@@ -1,10 +1,14 @@
 """CLI entry point.
 
 Usage:
-  python run.py agent maybank   # read Maybank balance once
-  python run.py agent interbank # read Interbank balances once
-  python run.py all             # run Maybank + Interbank, append rows to ~/Desktop/bank_balances.csv
-  python run.py probe           # show the iPhone Mirroring window bounds
+  python run.py web interbank        # web scraper: Interbank balances + transactions
+  python run.py agent maybank        # phone agent: read Maybank balance once
+  python run.py agent interbank      # phone agent: read Interbank balances once
+  python run.py statement maybank          # get Maybank statement
+  python run.py statement shadowsaa       # get Interbank shadowsaa statement
+  python run.py statement cid             # get Interbank cid statement
+  python run.py all                  # run Maybank + Interbank, append rows to ~/Desktop/bank_balances.csv
+  python run.py probe                # show the iPhone Mirroring window bounds
 """
 
 from __future__ import annotations
@@ -16,6 +20,29 @@ import sys
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _web(bank: str, dry_run: bool = False) -> int:
+    """Run a web-based bank scraper."""
+    from agent import storage
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    bank = bank.lower()
+
+    if bank == "interbank":
+        from web.interbank import run_interbank
+        result = run_interbank(dry_run=dry_run)
+        if result["success"]:
+            if result.get("balances"):
+                storage.save(bank="interbank", kind="balance", result=result["balances"])
+            if result.get("statements"):
+                for stmt in result["statements"]:
+                    if stmt.get("transactions"):
+                        storage.save(bank="interbank", kind="statement", result={"statement": stmt})
+        print(json.dumps(result, indent=2, default=str))
+        return 0 if result["success"] else 1
+    else:
+        print(f"unknown web bank {bank!r}; currently supported: interbank")
+        return 2
 
 
 def _agent(bank: str) -> int:
@@ -32,6 +59,36 @@ def _agent(bank: str) -> int:
         storage.save(bank=bank, kind="balance", result=result.result)
     print(json.dumps({
         "success": result.success,
+        "steps": result.steps,
+        "result": result.result,
+        "error": result.error,
+        "history": result.history,
+    }, indent=2))
+    return 0 if result.success else 1
+
+
+def _statement(account: str) -> int:
+    from agent import actions, runner, states, storage
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    account = account.lower()
+    if account == "maybank":
+        bank_key = "maybank_statement"
+        bank_name = "maybank"
+    elif account in states.STATEMENT_ACCOUNTS:
+        bank_key = f"interbank_statement_{account}"
+        bank_name = "interbank"
+    else:
+        valid = ["maybank"] + list(states.STATEMENT_ACCOUNTS)
+        print(f"unknown account {account!r}; choose from {valid}")
+        return 2
+    config = states.BANKS[bank_key]
+    actions.restart_ipm()
+    result = runner.run(bank_key, config)
+    if result.success:
+        storage.save(bank=bank_name, kind="statement", result=result.result)
+    print(json.dumps({
+        "success": result.success,
+        "account": account,
         "steps": result.steps,
         "result": result.result,
         "error": result.error,
@@ -129,8 +186,13 @@ def main() -> int:
     if not args:
         print(__doc__)
         return 2
+    if args[0] == "web" and len(args) >= 2:
+        dry = "--dry-run" in args
+        return _web(args[1], dry_run=dry)
     if args[0] == "agent" and len(args) >= 2:
         return _agent(args[1])
+    if args[0] == "statement" and len(args) >= 2:
+        return _statement(args[1])
     if args[0] == "all":
         return _all()
     if args[0] == "probe":
